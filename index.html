@@ -1082,29 +1082,150 @@
     if(state.currentView==='settings'){
       title.textContent='SETTINGS';
       micro.textContent='SYSTEM_CONFIG';
+
       body.innerHTML = `
         <div class="view-grid">
           <div class="view-card">
-            <h3>Local Data</h3>
-            <p class="muted">Your organizer is currently stored in this browser using localStorage.</p>
-            <button id="exportDataBtn" class="tech-btn small">EXPORT DATA</button>
+            <h3>Backup & Restore</h3>
+            <p class="muted">Create a complete backup of this phone's organizer data, or restore it on another device.</p>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+              <button id="exportDataBtn" class="tech-btn small primary">EXPORT BACKUP</button>
+              <button id="importDataBtn" class="tech-btn small">IMPORT BACKUP</button>
+              <input id="importDataFile" type="file" accept=".json,application/json" style="display:none">
+            </div>
+
+            <div id="backupStatus" class="muted" style="margin-top:12px">
+              Backups include calendar events, shopping items, financial entries, notes, and goals.
+            </div>
           </div>
+
+          <div class="view-card">
+            <h3>Storage</h3>
+            <p class="muted">Your live organizer data stays on this device. GitHub hosts the app itself, not your personal entries.</p>
+            <div class="micro" style="margin-top:12px">RECOMMENDED</div>
+            <p class="muted">Save exported backups to Google Drive or another safe location.</p>
+          </div>
+
           <div class="view-card">
             <h3>Reset</h3>
-            <p class="muted">Delete all calendar, shopping and financial data from this browser.</p>
+            <p class="muted">Delete all organizer data from this device.</p>
             <button id="resetDataBtn" class="tech-btn small" style="border-color:#74333a;color:#ff7b7b">RESET ALL DATA</button>
           </div>
         </div>`;
+
+      function buildBackupPayload(){
+        return {
+          app: 'MyOrganizer',
+          backupVersion: 1,
+          exportedAt: new Date().toISOString(),
+          organizerData: state.data,
+          notes: localStorage.getItem('myOrganizerNotes') || '',
+          goals: JSON.parse(localStorage.getItem('myOrganizerGoals') || '[]')
+        };
+      }
+
       document.getElementById('exportDataBtn').addEventListener('click',()=>{
-        const blob=new Blob([JSON.stringify(state.data,null,2)],{type:'application/json'});
-        const url=URL.createObjectURL(blob);
-        const a=document.createElement('a');
-        a.href=url;a.download='myorganizer-backup.json';a.click();
+        const payload = buildBackupPayload();
+        const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+
+        const stamp = new Date().toISOString().slice(0,10);
+        a.href = url;
+        a.download = `myorganizer-backup-${stamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
         URL.revokeObjectURL(url);
+
+        document.getElementById('backupStatus').textContent =
+          `Backup exported ${new Date().toLocaleString()}. Save the file somewhere safe.`;
       });
+
+      const importBtn = document.getElementById('importDataBtn');
+      const importFile = document.getElementById('importDataFile');
+
+      importBtn.addEventListener('click',()=>importFile.click());
+
+      importFile.addEventListener('change',()=>{
+        const file = importFile.files && importFile.files[0];
+        if(!file) return;
+
+        const reader = new FileReader();
+
+        reader.onload = ()=>{
+          try{
+            const parsed = JSON.parse(reader.result);
+
+            if(
+              !parsed ||
+              parsed.app !== 'MyOrganizer' ||
+              parsed.backupVersion !== 1 ||
+              typeof parsed.organizerData !== 'object'
+            ){
+              throw new Error('This is not a valid MyOrganizer backup file.');
+            }
+
+            const eventCount = Object.values(parsed.organizerData || {})
+              .reduce((sum,day)=>sum + ((day && day.events) ? day.events.length : 0),0);
+
+            const shoppingCount = Object.values(parsed.organizerData || {})
+              .reduce((sum,day)=>sum + ((day && day.shopping) ? day.shopping.length : 0),0);
+
+            const expenseCount = Object.values(parsed.organizerData || {})
+              .reduce((sum,day)=>sum + ((day && day.expenses) ? day.expenses.length : 0),0);
+
+            const ok = confirm(
+              `Restore this backup?\n\n` +
+              `Events: ${eventCount}\n` +
+              `Shopping items: ${shoppingCount}\n` +
+              `Financial entries: ${expenseCount}\n\n` +
+              `This will replace the organizer data currently stored on this device.`
+            );
+
+            if(!ok){
+              importFile.value = '';
+              return;
+            }
+
+            state.data = parsed.organizerData || {};
+            localStorage.setItem('myOrganizerDataV1', JSON.stringify(state.data));
+            localStorage.setItem('myOrganizerNotes', parsed.notes || '');
+            localStorage.setItem('myOrganizerGoals', JSON.stringify(parsed.goals || []));
+
+            document.getElementById('backupStatus').textContent =
+              `Backup restored successfully from ${file.name}.`;
+
+            saveData();
+            renderAll();
+            state.currentView='settings';
+            renderAppView();
+          }catch(err){
+            alert(err.message || 'Could not restore this backup.');
+          }finally{
+            importFile.value = '';
+          }
+        };
+
+        reader.onerror = ()=>{
+          alert('The backup file could not be read.');
+          importFile.value = '';
+        };
+
+        reader.readAsText(file);
+      });
+
       document.getElementById('resetDataBtn').addEventListener('click',()=>{
-        if(confirm('Delete all organizer data?')){
-          state.data={};saveData();renderAll();renderAppView();
+        if(confirm('Delete ALL MyOrganizer data from this device? This cannot be undone unless you have a backup.')){
+          state.data={};
+          localStorage.removeItem('myOrganizerDataV1');
+          localStorage.removeItem('myOrganizerNotes');
+          localStorage.removeItem('myOrganizerGoals');
+          saveData();
+          renderAll();
+          state.currentView='settings';
+          renderAppView();
         }
       });
     }
